@@ -1,0 +1,32 @@
+{
+  "monthly_total": 1000.0,
+  "buckets": {
+    "cash_savings": {
+      "label": "Cash Savings",
+      "monthly_amount": 750.0,
+      "rates": {
+        "low": 0.03,
+        "average": 0.03,
+        "high": 0.03
+      }
+    },
+    "index_etfs": {
+      "label": "Index ETFs",
+      "monthly_amount": 150.0,
+      "rates": {
+        "low": 0.1,
+        "average": 0.12,
+        "high": 0.14
+      }
+    },
+    "stocks": {
+      "label": "Individual Stocks",
+      "monthly_amount": 100.0,
+      "rates": {
+        "low": 0.05,
+        "average": 0.15,
+        "high": 0.25
+      }
+    }
+  }
+}

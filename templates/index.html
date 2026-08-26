@@ -1,0 +1,641 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Brokerage Dashboard</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <nav class="navbar navbar-dark bg-dark mb-4">
+    <div class="container">
+      <span class="navbar-brand mb-0 h1">Brokerage Dashboard</span>
+      <span class="badge text-bg-secondary">wireframe / local JSON</span>
+    </div>
+  </nav>
+
+  <div class="container">
+
+    {% if unresolved_tickers %}
+    <div class="alert alert-danger">
+      <strong>Missing exchange rate for: {{ unresolved_tickers | join(", ") }}.</strong>
+      No transaction has both EUR and USD filled in yet, so a rate can't be inferred —
+      cost basis, market value, and gain/loss for these tickers below are understated
+      (currently treated as €0 wherever the price is unresolved). Add or edit one
+      transaction per ticker with both currencies filled in to fix this.
+    </div>
+    {% endif %}
+
+    <!-- Portfolio summary -->
+    <div class="row row-cols-2 row-cols-md-5 g-3 mb-4">
+      <div class="col">
+        <div class="card text-bg-light h-100">
+          <div class="card-body">
+            <div class="text-muted small">Total Cost Basis</div>
+            <div class="fs-4 fw-semibold">€{{ "%.2f"|format(summary.total_cost) }}</div>
+          </div>
+        </div>
+      </div>
+      <div class="col">
+        <div class="card text-bg-light h-100">
+          <div class="card-body">
+            <div class="text-muted small">Market Value</div>
+            <div class="fs-4 fw-semibold">€{{ "%.2f"|format(summary.total_value) }}</div>
+          </div>
+        </div>
+      </div>
+      <div class="col">
+        <div class="card h-100 {{ 'text-bg-success' if summary.total_gain_loss >= 0 else 'text-bg-danger' }}">
+          <div class="card-body">
+            <div class="small">Unrealized Gain / Loss</div>
+            <div class="fs-4 fw-semibold">€{{ "%.2f"|format(summary.total_gain_loss) }}</div>
+          </div>
+        </div>
+      </div>
+      <div class="col">
+        <div class="card text-bg-light h-100">
+          <div class="card-body">
+            <div class="text-muted small">Dividends Received</div>
+            <div class="fs-4 fw-semibold">€{{ "%.2f"|format(summary.total_dividends) }}</div>
+          </div>
+        </div>
+      </div>
+      <div class="col">
+        <div class="card h-100 {{ 'text-bg-info' if liquid_cash >= 0 else 'text-bg-danger' }}">
+          <div class="card-body">
+            <div class="small">Liquid Cash</div>
+            <div class="fs-4 fw-semibold">€{{ "%.2f"|format(liquid_cash) }}</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Portfolio performance over time -->
+    <div class="card mb-4">
+      <div class="card-header">Portfolio Performance</div>
+      <div class="card-body">
+        {% if history|length < 2 %}
+        <div class="text-muted small">Add a few more transactions across different dates to see a trend here.</div>
+        {% endif %}
+        <canvas id="historyChart" height="90"></canvas>
+      </div>
+      <div class="card-footer text-muted small">
+        Snapshotted at each transaction date using the cost basis and last transaction price at that point —
+        not live quotes, so this reflects trading activity, not day-to-day price movement between trades.
+      </div>
+    </div>
+    <script id="portfolioHistoryData" type="application/json">{{ history | tojson }}</script>
+
+    <!-- Monthly savings/investment strategy -->
+    <div class="row g-4 mb-1">
+      <div class="col-lg-4">
+        <div class="card h-100">
+          <div class="card-header">Monthly Strategy</div>
+          <div class="card-body">
+            <canvas id="strategyPieChart" height="160"></canvas>
+            <table class="table table-sm mt-3 mb-0">
+              <thead>
+                <tr>
+                  <th>Bucket</th>
+                  <th class="text-end">Amount</th>
+                  <th class="text-end">%</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for key, b in strategy.buckets.items() %}
+                <tr>
+                  <td>{{ b.label }}</td>
+                  <td class="text-end" id="strategyTableAmount-{{ key }}">€{{ "%.0f"|format(b.monthly_amount) }}</td>
+                  <td class="text-end" id="strategyTablePct-{{ key }}">{{ "%.0f"|format(b.monthly_amount / strategy.monthly_total * 100) }}%</td>
+                </tr>
+                {% endfor %}
+              </tbody>
+              <tfoot>
+                <tr class="fw-semibold">
+                  <td>Total</td>
+                  <td class="text-end" id="strategyTableTotal">€{{ "%.0f"|format(strategy.monthly_total) }}</td>
+                  <td class="text-end">100%</td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div class="col-lg-8">
+        <div class="card h-100">
+          <div class="card-header">Strategy Growth Projection</div>
+          <div class="card-body">
+            <p class="text-muted small">
+              Drag each bucket's monthly contribution, and edit its low / average / high annual
+              return assumptions — e.g. set Cash Savings to your bank's actual APR.
+            </p>
+
+            <div class="row g-3 mb-2">
+              {% for key, b in strategy.buckets.items() %}
+              <div class="col-md-4">
+                <label class="form-label small mb-0 d-flex justify-content-between">
+                  <span>{{ b.label }}</span>
+                  <span class="fw-semibold" id="bucketValue-{{ key }}">€{{ "%.0f"|format(b.monthly_amount) }}</span>
+                </label>
+                <input type="range" class="form-range bucket-slider" id="bucketSlider-{{ key }}"
+                       data-bucket="{{ key }}" min="0" max="1500" step="10" value="{{ b.monthly_amount }}">
+
+                <div class="row g-1 mt-1">
+                  <div class="col-4">
+                    <label class="form-label mb-0 text-muted" style="font-size: 0.65rem;">Low %</label>
+                    <input type="number" class="form-control form-control-sm rate-input"
+                           data-bucket="{{ key }}" data-scenario="low"
+                           value="{{ "%.2f"|format(b.rates.low * 100) }}" step="0.1">
+                  </div>
+                  <div class="col-4">
+                    <label class="form-label mb-0 text-muted" style="font-size: 0.65rem;">Avg %</label>
+                    <input type="number" class="form-control form-control-sm rate-input"
+                           data-bucket="{{ key }}" data-scenario="average"
+                           value="{{ "%.2f"|format(b.rates.average * 100) }}" step="0.1">
+                  </div>
+                  <div class="col-4">
+                    <label class="form-label mb-0 text-muted" style="font-size: 0.65rem;">High %</label>
+                    <input type="number" class="form-control form-control-sm rate-input"
+                           data-bucket="{{ key }}" data-scenario="high"
+                           value="{{ "%.2f"|format(b.rates.high * 100) }}" step="0.1">
+                  </div>
+                </div>
+              </div>
+              {% endfor %}
+            </div>
+
+            <div class="row g-2 align-items-center mb-3">
+              <div class="col-auto">
+                <label class="form-label small mb-0">Years</label>
+              </div>
+              <div class="col">
+                <input type="range" class="form-range" id="strategyYears" min="1" max="40" step="1" value="20">
+              </div>
+              <div class="col-auto">
+                <span class="fw-semibold" id="strategyYearsValue">20</span>
+              </div>
+              <div class="col-auto text-muted small">
+                Monthly total: <span id="bucketTotal" class="fw-semibold text-body">€1,000</span>
+              </div>
+              <div class="col-auto ms-auto">
+                <button id="saveStrategyBtn" class="btn btn-outline-secondary btn-sm">Save as defaults</button>
+                <span id="saveStrategyStatus" class="text-success small ms-1"></span>
+              </div>
+            </div>
+
+            <canvas id="strategyChart" height="180"></canvas>
+
+            <div class="row g-2 mt-2 text-center">
+              <div class="col-4">
+                <div class="text-muted small">Low</div>
+                <div class="fw-semibold" id="strategyFinalLow">-</div>
+              </div>
+              <div class="col-4">
+                <div class="text-muted small">Average</div>
+                <div class="fw-semibold" id="strategyFinalAvg">-</div>
+              </div>
+              <div class="col-4">
+                <div class="text-muted small">High</div>
+                <div class="fw-semibold" id="strategyFinalHigh">-</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tax estimate (Ireland) -->
+    <div class="card mb-4 border-warning-subtle">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span>Tax Estimate — Ireland ({{ tax_summary.tax_year }})</span>
+        <button type="button" class="btn btn-outline-secondary btn-sm" id="taxSettingsBtn">Settings</button>
+      </div>
+      <div class="card-body">
+        <div class="alert alert-warning small mb-3">
+          Simplified estimate, not tax advice. Share lots are matched FIFO — Ireland's same-day and
+          4-week "bed and breakfast" identification rules aren't modeled. "Current price" is each
+          ticker's most recent transaction price, not a live quote. Confirm with a professional (or
+          Revenue.ie) before filing or paying.
+        </div>
+
+        <div class="row g-3 mb-4">
+          <div class="col-md-4">
+            <div class="card text-bg-light h-100">
+              <div class="card-body">
+                <div class="text-muted small">Estimated Tax Due This Year</div>
+                <div class="fs-4 fw-semibold">€{{ "%.2f"|format(tax_summary.total_tax_due_estimate) }}</div>
+              </div>
+            </div>
+          </div>
+          <div class="col-md-4">
+            <div class="card text-bg-light h-100">
+              <div class="card-body">
+                <div class="text-muted small">CGT Exemption Remaining</div>
+                <div class="fs-4 fw-semibold">
+                  €{{ "%.0f"|format(tax_summary.cgt.exemption_remaining) }}
+                  <span class="fs-6 text-muted">/ €{{ "%.0f"|format(tax_summary.cgt.annual_exemption) }}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="col-md-4">
+            <div class="card text-bg-light h-100">
+              <div class="card-body">
+                <div class="text-muted small">Exit Tax Due (Deemed Disposals)</div>
+                <div class="fs-4 fw-semibold">€{{ "%.2f"|format(tax_summary.exit_tax.tax_due_this_year) }}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="row g-4">
+          <div class="col-lg-6">
+            <h6 class="mb-1">CGT — Stock Trades</h6>
+            <p class="text-muted small">
+              {{ "%.0f"|format(tax_summary.cgt.rate * 100) }}% on gains above the
+              €{{ "%.0f"|format(tax_summary.cgt.annual_exemption) }} annual exemption. The exemption
+              doesn't carry forward — unused allowance is lost at year end.
+            </p>
+            <table class="table table-sm">
+              <tbody>
+                <tr><td>Realized gain YTD</td><td class="text-end">€{{ "%.2f"|format(tax_summary.cgt.realized_gain_ytd) }}</td></tr>
+                <tr><td>Exemption used</td><td class="text-end">€{{ "%.2f"|format(tax_summary.cgt.exemption_used) }}</td></tr>
+                <tr><td>Exemption remaining</td><td class="text-end">€{{ "%.2f"|format(tax_summary.cgt.exemption_remaining) }}</td></tr>
+                <tr class="fw-semibold"><td>Tax due YTD</td><td class="text-end">€{{ "%.2f"|format(tax_summary.cgt.tax_due_ytd) }}</td></tr>
+              </tbody>
+            </table>
+
+            <div class="small text-muted mb-1">
+              Suggested sales to use up the remaining allowance (highest gain/share first, so fewest shares sold):
+            </div>
+            {% if tax_summary.cgt.suggested_sales %}
+            <table class="table table-sm">
+              <thead>
+                <tr>
+                  <th>Ticker</th>
+                  <th>Lot bought</th>
+                  <th class="text-end">Shares to sell</th>
+                  <th class="text-end">Est. gain</th>
+                  <th class="text-end">Est. proceeds</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for s in tax_summary.cgt.suggested_sales %}
+                <tr>
+                  <td>{{ s.ticker }}</td>
+                  <td>{{ s.buy_date }}</td>
+                  <td class="text-end">{{ "%.3f"|format(s.shares_to_sell) }}</td>
+                  <td class="text-end">€{{ "%.2f"|format(s.estimated_gain) }}</td>
+                  <td class="text-end">€{{ "%.2f"|format(s.estimated_proceeds) }}</td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+            {% else %}
+            <div class="text-muted small">No suggestions — either no unrealized gains on stock-classified holdings, or the allowance is already used up.</div>
+            {% endif %}
+          </div>
+
+          <div class="col-lg-6">
+            <h6 class="mb-1">Deemed Disposal — ETFs</h6>
+            <p class="text-muted small">
+              {{ "%.0f"|format(tax_summary.exit_tax.rate * 100) }}% exit tax on the gain every
+              {{ tax_summary.exit_tax.deemed_disposal_years }} years from purchase — whether or not you
+              actually sell. No annual exemption applies, and exit-tax losses can't offset CGT gains.
+            </p>
+            {% if tax_summary.exit_tax.schedule %}
+            <table class="table table-sm">
+              <thead>
+                <tr>
+                  <th>Ticker</th>
+                  <th>Bought</th>
+                  <th>Deemed disposal date</th>
+                  <th class="text-end">Est. gain</th>
+                  <th class="text-end">Est. tax</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for s in tax_summary.exit_tax.schedule %}
+                <tr>
+                  <td>{{ s.ticker }}</td>
+                  <td>{{ s.buy_date }}</td>
+                  <td>
+                    {{ s.deemed_disposal_date }}
+                    {% if s.overdue %}
+                    <span class="badge text-bg-danger">overdue</span>
+                    {% elif s.due_this_year %}
+                    <span class="badge text-bg-warning">this year</span>
+                    {% endif %}
+                  </td>
+                  <td class="text-end">€{{ "%.2f"|format(s.estimated_gain) }}</td>
+                  <td class="text-end">€{{ "%.2f"|format(s.estimated_tax) }}</td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+            {% else %}
+            <div class="text-muted small">No holdings classified as ETFs yet — set asset class per ticker in Settings.</div>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Liquidity planner -->
+    <div class="card mb-4">
+      <div class="card-header">Liquidity Planner</div>
+      <div class="card-body">
+        <p class="text-muted small">
+          You currently have <strong>€{{ "%.2f"|format(liquid_cash) }}</strong> in liquid cash (uninvested —
+          deposits and proceeds not yet reinvested or withdrawn). Set a date and an amount you need, and this
+          suggests which lots to sell to get there, plus the tax cost of doing it.
+        </p>
+        <div id="liqPlanError" class="alert alert-danger d-none py-2 small"></div>
+        <div class="row g-2 align-items-end mb-3">
+          <div class="col-auto">
+            <label class="form-label small mb-0">By this date</label>
+            <input type="date" id="liqTargetDate" class="form-control form-control-sm">
+          </div>
+          <div class="col-auto">
+            <label class="form-label small mb-0">I need this much cash (€)</label>
+            <input type="number" id="liqTargetAmount" class="form-control form-control-sm" step="0.01" min="0">
+          </div>
+          <div class="col-auto">
+            <button type="button" class="btn btn-primary btn-sm" id="liqPlanBtn">Plan Sale</button>
+          </div>
+        </div>
+        <div id="liqPlanResults"></div>
+      </div>
+      <div class="card-footer text-muted small">
+        Estimate for planning purposes, not tax advice. Sells the lowest gain-per-share lots first to minimize
+        realized gains, using each ticker's last transaction price (not a live quote or a projection to the
+        target date) and the same simplified FIFO / CGT / exit-tax rules as the Tax Estimate above.
+      </div>
+    </div>
+
+    <!-- Holdings -->
+    <div class="card mb-4">
+      <div class="card-header">Holdings</div>
+      <div class="table-responsive">
+        <table class="table table-sm mb-0">
+          <thead>
+            <tr>
+              <th>Ticker</th>
+              <th class="text-end">Shares</th>
+              <th class="text-end">Cost Basis</th>
+              <th class="text-end">Last Price</th>
+              <th class="text-end">Market Value</th>
+              <th class="text-end">Gain / Loss</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for ticker, h in holdings.items() %}
+            <tr>
+              <td class="fw-semibold">{{ ticker }}</td>
+              <td class="text-end">{{ "%.3f"|format(h.shares) }}</td>
+              <td class="text-end">€{{ "%.2f"|format(h.cost_basis) }}</td>
+              <td class="text-end">€{{ "%.2f"|format(h.last_price) }}</td>
+              <td class="text-end">€{{ "%.2f"|format(h.market_value) }}</td>
+              <td class="text-end {{ 'text-success' if h.gain_loss >= 0 else 'text-danger' }}">
+                €{{ "%.2f"|format(h.gain_loss) }}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div class="card-footer text-muted small">
+        Last price is the most recent transaction price for that ticker — not a live quote.
+        All values are aggregated in EUR using the EUR amount entered on each transaction.
+      </div>
+    </div>
+
+    <!-- Transactions -->
+    <div class="card mb-4">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span>Transactions</span>
+        <button type="button" class="btn btn-primary btn-sm" id="addTxnBtn">+ Add Transaction</button>
+      </div>
+      <div class="table-responsive">
+        <table class="table table-sm mb-0" id="txnTable">
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Ticker</th>
+              <th>Type</th>
+              <th class="text-end">Shares</th>
+              <th class="text-end">Price (EUR)</th>
+              <th class="text-end">Price (USD)</th>
+              <th>Account</th>
+              <th>Notes</th>
+              <th class="text-end">Actions</th>
+            </tr>
+          </thead>
+          <tbody id="txnTableBody">
+            {% for t in transactions %}
+            <tr data-txn="{{ t | tojson | forceescape }}">
+              <td>{{ t.date }}</td>
+              <td>{{ t.ticker }}</td>
+              <td>
+                <span class="badge text-bg-{{ 'primary' if t.type == 'buy' else ('warning' if t.type == 'sell' else ('success' if t.type == 'dividend' else ('info' if t.type == 'deposit' else 'secondary'))) }}">
+                  {{ t.type }}
+                </span>
+              </td>
+              <td class="text-end">{{ "%.3f"|format(t.shares) if t.shares else "-" }}</td>
+              <td class="text-end">
+                {% if t.eur_unresolved %}
+                <span class="text-danger" title="No transaction yet has both EUR and USD filled in, so a rate couldn't be inferred">rate unknown</span>
+                {% else %}
+                €{{ "%.2f"|format(t.display_eur) }}
+                {% if t.eur_inferred %}
+                <div class="text-muted" style="font-size: 0.7rem;">inferred from nearest rate</div>
+                {% endif %}
+                {% endif %}
+              </td>
+              <td class="text-end">
+                {% if t.usd_unresolved %}
+                <span class="text-danger" title="No transaction yet has both EUR and USD filled in, so a rate couldn't be inferred">rate unknown</span>
+                {% elif t.display_usd %}
+                ${{ "%.2f"|format(t.display_usd) }}
+                {% if t.usd_inferred %}
+                <div class="text-muted" style="font-size: 0.7rem;">inferred from nearest rate</div>
+                {% elif not t.eur_unresolved %}
+                <div class="text-muted" style="font-size: 0.7rem;">implied {{ "%.4f"|format(t.display_usd / t.display_eur) }}</div>
+                {% endif %}
+                {% else %}
+                <span class="text-muted">—</span>
+                {% endif %}
+              </td>
+              <td>{{ t.account }}</td>
+              <td class="text-muted small">{{ t.notes or "" }}</td>
+              <td class="text-end text-nowrap">
+                <button type="button" class="btn btn-outline-secondary btn-sm edit-txn-btn" data-id="{{ t.id }}">Edit</button>
+                <button type="button" class="btn btn-outline-danger btn-sm delete-txn-btn" data-id="{{ t.id }}">Delete</button>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add / edit transaction modal -->
+  <div class="modal fade" id="txnModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title" id="txnModalTitle">Add Transaction</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+          <div id="txnFormError" class="alert alert-danger d-none py-2 small"></div>
+          <form id="txnForm">
+            <input type="hidden" id="txnId" value="">
+            <div class="row g-2">
+              <div class="col-6">
+                <label class="form-label small mb-0">Date</label>
+                <input type="date" id="txnDate" class="form-control form-control-sm" required>
+              </div>
+              <div class="col-6">
+                <label class="form-label small mb-0">Type</label>
+                <select id="txnType" class="form-select form-select-sm">
+                  <option value="buy">Buy</option>
+                  <option value="sell">Sell</option>
+                  <option value="dividend">Dividend</option>
+                  <option value="deposit">Deposit</option>
+                  <option value="withdrawal">Withdrawal</option>
+                </select>
+              </div>
+              <div class="col-6 txn-field-ticker">
+                <label class="form-label small mb-0">Ticker</label>
+                <input type="text" id="txnTicker" class="form-control form-control-sm" placeholder="e.g. VOO" required>
+              </div>
+              <div class="col-6">
+                <label class="form-label small mb-0">Account</label>
+                <input type="text" id="txnAccount" class="form-control form-control-sm" placeholder="e.g. Brokerage" required>
+              </div>
+              <div class="col-6 txn-field-shares">
+                <label class="form-label small mb-0">Shares</label>
+                <input type="number" id="txnShares" class="form-control form-control-sm" step="0.001" min="0">
+              </div>
+              <div class="col-12 txn-field-price">
+                <div class="text-muted" style="font-size: 0.75rem;">
+                  Leave EUR or USD blank if you don't have it — it'll be inferred from the nearest
+                  transaction where both currencies are known.
+                </div>
+              </div>
+              <div class="col-6 txn-field-price">
+                <label class="form-label small mb-0">Price per share (EUR)</label>
+                <input type="number" id="txnPriceEur" class="form-control form-control-sm" step="0.0001" min="0">
+              </div>
+              <div class="col-6 txn-field-price">
+                <label class="form-label small mb-0 text-muted">or total spent (EUR)</label>
+                <input type="number" id="txnTotalEur" class="form-control form-control-sm" step="0.01" min="0" placeholder="fills price per share">
+              </div>
+              <div class="col-6 txn-field-price">
+                <label class="form-label small mb-0">Price per share (USD)</label>
+                <input type="number" id="txnPriceUsd" class="form-control form-control-sm" step="0.0001" min="0">
+              </div>
+              <div class="col-6 txn-field-price">
+                <label class="form-label small mb-0 text-muted">or total spent (USD)</label>
+                <input type="number" id="txnTotalUsd" class="form-control form-control-sm" step="0.01" min="0" placeholder="fills price per share">
+              </div>
+              <div class="col-12 txn-field-amount d-none">
+                <div class="text-muted" style="font-size: 0.75rem;">
+                  Leave EUR or USD blank if you don't have it — it'll be inferred from the nearest
+                  transaction where both currencies are known.
+                </div>
+              </div>
+              <div class="col-6 txn-field-amount d-none">
+                <label class="form-label small mb-0">Amount (EUR)</label>
+                <input type="number" id="txnAmountEur" class="form-control form-control-sm" step="0.01" min="0">
+              </div>
+              <div class="col-6 txn-field-amount d-none">
+                <label class="form-label small mb-0">Amount (USD)</label>
+                <input type="number" id="txnAmountUsd" class="form-control form-control-sm" step="0.01" min="0">
+              </div>
+              <div class="col-12">
+                <label class="form-label small mb-0">Notes</label>
+                <input type="text" id="txnNotes" class="form-control form-control-sm">
+              </div>
+            </div>
+          </form>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>
+          <button type="button" class="btn btn-primary btn-sm" id="txnSaveBtn">Save</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tax settings modal -->
+  <div class="modal fade" id="taxSettingsModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title">Tax Settings</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+          <div id="taxSettingsError" class="alert alert-danger d-none py-2 small"></div>
+          <div class="row g-2 mb-3">
+            <div class="col-6">
+              <label class="form-label small mb-0">CGT rate (%)</label>
+              <input type="number" id="taxCgtRate" class="form-control form-control-sm" step="0.1" min="0"
+                     value="{{ "%.1f"|format(tax_settings.cgt_rate * 100) }}">
+            </div>
+            <div class="col-6">
+              <label class="form-label small mb-0">CGT annual exemption (€)</label>
+              <input type="number" id="taxCgtExemption" class="form-control form-control-sm" step="1" min="0"
+                     value="{{ "%.0f"|format(tax_settings.cgt_annual_exemption) }}">
+            </div>
+            <div class="col-6">
+              <label class="form-label small mb-0">Exit tax rate (%)</label>
+              <input type="number" id="taxExitRate" class="form-control form-control-sm" step="0.1" min="0"
+                     value="{{ "%.1f"|format(tax_settings.exit_tax_rate * 100) }}">
+            </div>
+            <div class="col-6">
+              <label class="form-label small mb-0">Deemed disposal (years)</label>
+              <input type="number" id="taxDeemedYears" class="form-control form-control-sm" step="1" min="1"
+                     value="{{ tax_settings.deemed_disposal_years }}">
+            </div>
+          </div>
+
+          <div class="small text-muted mb-1">Classify each ticker for tax purposes:</div>
+          <table class="table table-sm mb-0">
+            <thead>
+              <tr><th>Ticker</th><th>Asset class</th></tr>
+            </thead>
+            <tbody>
+              {% for ticker in tickers %}
+              {% set current_class = tax_settings.asset_classes.get(ticker, tax_settings.default_asset_class) %}
+              <tr>
+                <td class="align-middle">{{ ticker }}</td>
+                <td>
+                  <select class="form-select form-select-sm asset-class-select" data-ticker="{{ ticker }}">
+                    <option value="stock" {{ "selected" if current_class == "stock" else "" }}>Stock (CGT)</option>
+                    <option value="etf" {{ "selected" if current_class == "etf" else "" }}>ETF (Exit Tax)</option>
+                  </select>
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>
+          <button type="button" class="btn btn-primary btn-sm" id="taxSettingsSaveBtn">Save</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
