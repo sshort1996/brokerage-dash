@@ -1,34 +1,63 @@
-import json
 from datetime import date
-from pathlib import Path
 
-BUDGET_PATH = Path(__file__).parent / "data" / "budget.json"
-BUDGET_ACTUALS_PATH = Path(__file__).parent / "data" / "budget_actuals.json"
+from db import get_connection
 
 
 def load_budget_categories():
-    with open(BUDGET_PATH) as f:
-        return json.load(f)["categories"]
+    conn = get_connection()
+    try:
+        rows = conn.execute("SELECT * FROM budget_categories ORDER BY rowid").fetchall()
+        return {
+            row["key"]: {"label": row["label"], "type": row["type"], "monthly_target": row["monthly_target"]}
+            for row in rows
+        }
+    finally:
+        conn.close()
 
 
 def save_budget_categories(categories):
-    with open(BUDGET_PATH, "w") as f:
-        json.dump({"categories": categories}, f, indent=2)
-        f.write("\n")
+    conn = get_connection()
+    try:
+        conn.execute("DELETE FROM budget_categories")
+        conn.executemany(
+            "INSERT INTO budget_categories (key, label, type, monthly_target) VALUES (?, ?, ?, ?)",
+            [(key, c["label"], c["type"], c["monthly_target"]) for key, c in categories.items()],
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def load_budget_actuals():
     """{month: {category_key: total}} — one hand-entered total per category per
     month (e.g. copied from a bank app's spending-insights tab), not a
     transaction-level ledger."""
-    with open(BUDGET_ACTUALS_PATH) as f:
-        return json.load(f)
+    conn = get_connection()
+    try:
+        rows = conn.execute("SELECT month, category_key, amount FROM budget_actuals").fetchall()
+        actuals = {}
+        for row in rows:
+            actuals.setdefault(row["month"], {})[row["category_key"]] = row["amount"]
+        return actuals
+    finally:
+        conn.close()
 
 
 def save_budget_actuals(actuals):
-    with open(BUDGET_ACTUALS_PATH, "w") as f:
-        json.dump(actuals, f, indent=2)
-        f.write("\n")
+    conn = get_connection()
+    try:
+        conn.execute("DELETE FROM budget_actuals")
+        conn.executemany(
+            "INSERT INTO budget_actuals (month, category_key, amount) VALUES (?, ?, ?)",
+            [
+                (month, category_key, amount)
+                for month, values in actuals.items()
+                for category_key, amount in values.items()
+            ],
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def shift_month(month, delta):

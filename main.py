@@ -2,6 +2,7 @@ from datetime import date
 
 from flask import Flask, jsonify, render_template, request
 
+from db import init_db
 from budget import (
     load_budget_actuals,
     load_budget_categories,
@@ -38,6 +39,7 @@ def _parse_optional_float(payload, key):
     return float(raw)
 
 app = Flask(__name__)
+init_db()
 
 
 def _clean_txn_payload(payload):

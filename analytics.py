@@ -1,23 +1,39 @@
-import json
 from collections import defaultdict, deque
 from datetime import date
-from pathlib import Path
 
-DATA_PATH = Path(__file__).parent / "data" / "investments.json"
-STRATEGY_PATH = Path(__file__).parent / "data" / "strategy.json"
-TAX_SETTINGS_PATH = Path(__file__).parent / "data" / "tax_settings.json"
+from db import get_connection
+
+INVESTMENT_COLUMNS = (
+    "date", "ticker", "type", "account", "notes", "shares",
+    "price_eur", "price_usd", "total_eur", "total_usd", "amount_eur", "amount_usd",
+)
 
 
 def load_investments():
-    with open(DATA_PATH) as f:
-        return json.load(f)
+    conn = get_connection()
+    try:
+        rows = conn.execute("SELECT * FROM investments ORDER BY date, id").fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
 
 
 def save_investments(investments):
+    """Full-overwrite semantics (same as the JSON file it replaces): every call
+    replaces the entire table in one transaction, so a crash mid-write can't
+    leave a half-written/corrupt state the way json.dump could."""
     investments = sorted(investments, key=lambda t: (t["date"], t["id"]))
-    with open(DATA_PATH, "w") as f:
-        json.dump(investments, f, indent=2)
-        f.write("\n")
+    conn = get_connection()
+    try:
+        conn.execute("DELETE FROM investments")
+        conn.executemany(
+            "INSERT INTO investments (id, " + ", ".join(INVESTMENT_COLUMNS) + ") "
+            "VALUES (:id, " + ", ".join(f":{c}" for c in INVESTMENT_COLUMNS) + ")",
+            [{"id": t["id"], **{c: t.get(c) for c in INVESTMENT_COLUMNS}} for t in investments],
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def next_investment_id(investments):
@@ -29,14 +45,40 @@ def find_investment(investments, txn_id):
 
 
 def load_strategy():
-    with open(STRATEGY_PATH) as f:
-        return json.load(f)
+    conn = get_connection()
+    try:
+        rows = conn.execute("SELECT * FROM strategy_buckets ORDER BY key").fetchall()
+        buckets = {
+            row["key"]: {
+                "label": row["label"],
+                "monthly_amount": row["monthly_amount"],
+                "rates": {"low": row["rate_low"], "average": row["rate_average"], "high": row["rate_high"]},
+            }
+            for row in rows
+        }
+        return {
+            "monthly_total": sum(b["monthly_amount"] for b in buckets.values()),
+            "buckets": buckets,
+        }
+    finally:
+        conn.close()
 
 
 def save_strategy(strategy):
-    with open(STRATEGY_PATH, "w") as f:
-        json.dump(strategy, f, indent=2)
-        f.write("\n")
+    conn = get_connection()
+    try:
+        conn.execute("DELETE FROM strategy_buckets")
+        conn.executemany(
+            "INSERT INTO strategy_buckets (key, label, monthly_amount, rate_low, rate_average, rate_high) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            [
+                (key, b["label"], b["monthly_amount"], b["rates"]["low"], b["rates"]["average"], b["rates"]["high"])
+                for key, b in strategy["buckets"].items()
+            ],
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def _txn_currency_pair(txn):
@@ -305,14 +347,41 @@ def project_strategy(bucket_amounts, bucket_rates, years):
 
 
 def load_tax_settings():
-    with open(TAX_SETTINGS_PATH) as f:
-        return json.load(f)
+    conn = get_connection()
+    try:
+        row = conn.execute("SELECT * FROM tax_settings WHERE id = 1").fetchone()
+        asset_rows = conn.execute("SELECT ticker, asset_class FROM asset_classes").fetchall()
+        return {
+            "cgt_rate": row["cgt_rate"],
+            "cgt_annual_exemption": row["cgt_annual_exemption"],
+            "exit_tax_rate": row["exit_tax_rate"],
+            "deemed_disposal_years": row["deemed_disposal_years"],
+            "default_asset_class": row["default_asset_class"],
+            "asset_classes": {r["ticker"]: r["asset_class"] for r in asset_rows},
+        }
+    finally:
+        conn.close()
 
 
 def save_tax_settings(settings):
-    with open(TAX_SETTINGS_PATH, "w") as f:
-        json.dump(settings, f, indent=2)
-        f.write("\n")
+    conn = get_connection()
+    try:
+        conn.execute(
+            "UPDATE tax_settings SET cgt_rate=?, cgt_annual_exemption=?, exit_tax_rate=?, "
+            "deemed_disposal_years=?, default_asset_class=? WHERE id=1",
+            (
+                settings["cgt_rate"], settings["cgt_annual_exemption"], settings["exit_tax_rate"],
+                settings["deemed_disposal_years"], settings["default_asset_class"],
+            ),
+        )
+        conn.execute("DELETE FROM asset_classes")
+        conn.executemany(
+            "INSERT INTO asset_classes (ticker, asset_class) VALUES (?, ?)",
+            list(settings.get("asset_classes", {}).items()),
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def asset_class(ticker, tax_settings):
