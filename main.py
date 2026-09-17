@@ -1,5 +1,16 @@
+from datetime import date
+
 from flask import Flask, jsonify, render_template, request
 
+from budget import (
+    load_budget_actuals,
+    load_budget_categories,
+    month_label,
+    monthly_summary,
+    save_budget_actuals,
+    save_budget_categories,
+    shift_month,
+)
 from analytics import (
     annotate_transactions_display,
     cash_balance,
@@ -110,6 +121,7 @@ def dashboard():
     unresolved_tickers = sorted(t for t, h in holdings.items() if h["has_unresolved_currency"])
     return render_template(
         "index.html",
+        active_page="dashboard",
         holdings=holdings,
         summary=summary,
         history=history,
@@ -121,6 +133,69 @@ def dashboard():
         tickers=tickers,
         unresolved_tickers=unresolved_tickers,
     )
+
+
+@app.route("/budget")
+def budget_page():
+    categories = load_budget_categories()
+    actuals = load_budget_actuals()
+    current_month = date.today().strftime("%Y-%m")
+    month = request.args.get("month", current_month)
+    summary = monthly_summary(actuals, categories, month)
+    return render_template(
+        "budget.html",
+        active_page="budget",
+        categories=categories,
+        summary=summary,
+        month=month,
+        month_label=month_label(month),
+        prev_month=shift_month(month, -1),
+        next_month=shift_month(month, 1),
+    )
+
+
+@app.route("/api/budget_actuals", methods=["POST"])
+def api_budget_actuals():
+    payload = request.get_json(force=True) or {}
+    month = str(payload.get("month", "")).strip()
+    values = payload.get("values", {})
+
+    if not month:
+        return jsonify({"error": "month is required"}), 400
+    if not isinstance(values, dict):
+        return jsonify({"error": "values must be an object"}), 400
+
+    categories = load_budget_categories()
+    cleaned = {}
+    for key, raw in values.items():
+        if key not in categories:
+            continue
+        try:
+            amount = float(raw)
+        except (TypeError, ValueError):
+            return jsonify({"error": f"amount for {key} must be a number"}), 400
+        if amount < 0:
+            return jsonify({"error": f"amount for {key} can't be negative"}), 400
+        cleaned[key] = round(amount, 2)
+
+    actuals = load_budget_actuals()
+    actuals.setdefault(month, {}).update(cleaned)
+    save_budget_actuals(actuals)
+    return jsonify(actuals[month])
+
+
+@app.route("/api/budget_categories", methods=["GET", "POST"])
+def api_budget_categories():
+    if request.method == "GET":
+        return jsonify(load_budget_categories())
+
+    payload = request.get_json(force=True) or {}
+    categories = load_budget_categories()
+    for key, cfg in payload.items():
+        if key in categories and "monthly_target" in cfg:
+            categories[key]["monthly_target"] = max(float(cfg["monthly_target"]), 0)
+    save_budget_categories(categories)
+    return jsonify(categories)
 
 
 @app.route("/api/investments", methods=["GET", "POST"])

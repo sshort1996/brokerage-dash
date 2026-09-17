@@ -73,6 +73,7 @@ if (historyDataEl && historyCanvas) {
     },
     options: {
       responsive: true,
+      maintainAspectRatio: false,
       interaction: { mode: "index", intersect: false },
       plugins: { legend: { position: "bottom" } },
       scales: {
@@ -443,6 +444,7 @@ function renderStrategyPie() {
     },
     options: {
       responsive: true,
+      maintainAspectRatio: false,
       plugins: { legend: { position: "bottom" } },
     },
   });
@@ -494,6 +496,7 @@ function renderStrategyChart(result) {
     },
     options: {
       responsive: true,
+      maintainAspectRatio: false,
       interaction: { mode: "index", intersect: false },
       plugins: { legend: { position: "bottom" } },
       scales: {

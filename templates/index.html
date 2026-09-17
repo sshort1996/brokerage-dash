@@ -10,7 +10,13 @@
 <body>
   <nav class="navbar navbar-dark bg-dark mb-4">
     <div class="container">
-      <span class="navbar-brand mb-0 h1">Brokerage Dashboard</span>
+      <div class="d-flex align-items-center gap-4">
+        <span class="navbar-brand mb-0 h1">Brokerage Dashboard</span>
+        <ul class="nav">
+          <li class="nav-item"><a class="nav-link {{ 'text-white fw-semibold' if active_page == 'dashboard' else 'text-white-50' }}" href="/">Dashboard</a></li>
+          <li class="nav-item"><a class="nav-link {{ 'text-white fw-semibold' if active_page == 'budget' else 'text-white-50' }}" href="/budget">Budget</a></li>
+        </ul>
+      </div>
       <span class="badge text-bg-secondary">wireframe / local JSON</span>
     </div>
   </nav>
@@ -78,7 +84,9 @@
         {% if history|length < 2 %}
         <div class="text-muted small">Add a few more transactions across different dates to see a trend here.</div>
         {% endif %}
-        <canvas id="historyChart" height="90"></canvas>
+        <div style="position: relative; height: 300px;">
+          <canvas id="historyChart"></canvas>
+        </div>
       </div>
       <div class="card-footer text-muted small">
         Snapshotted at each transaction date using the cost basis and last transaction price at that point —
@@ -93,7 +101,9 @@
         <div class="card h-100">
           <div class="card-header">Monthly Strategy</div>
           <div class="card-body">
-            <canvas id="strategyPieChart" height="160"></canvas>
+            <div style="position: relative; height: 220px;">
+              <canvas id="strategyPieChart"></canvas>
+            </div>
             <table class="table table-sm mt-3 mb-0">
               <thead>
                 <tr>
@@ -185,7 +195,9 @@
               </div>
             </div>
 
-            <canvas id="strategyChart" height="180"></canvas>
+            <div style="position: relative; height: 280px;">
+              <canvas id="strategyChart"></canvas>
+            </div>
 
             <div class="row g-2 mt-2 text-center">
               <div class="col-4">
